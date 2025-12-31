@@ -1,0 +1,17 @@
+[
+  {
+    "id": "t1",
+    "title": "Local Renewable Energy Adoption",
+    "description": "Will the local city reach 40% renewable energy in the next 3 years?"
+  },
+  {
+    "id": "t2",
+    "title": "Public Art Initiative",
+    "description": "Will the new public art program complete 10 installations this year?"
+  },
+  {
+    "id": "t3",
+    "title": "Community Garden Expansion",
+    "description": "Will the community garden add 3 new plots by next season?"
+  }
+]

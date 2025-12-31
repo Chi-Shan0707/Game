@@ -1,26 +1,19 @@
-﻿/**
- * Reputation helpers: Brier score calculation for discrete outcomes.
- */
+// Brier score and reputation delta utilities
 
-export function brierScore(probabilities: number[], outcomeIndex: number): number {
-  const n = probabilities.length;
-  let sum = 0;
-  for (let i = 0; i < n; i++) {
-    const o = i === outcomeIndex ? 1 : 0;
-    const d = (probabilities[i] || 0) - o;
-    sum += d * d;
-  }
-  return sum;
+export function brierScore(predictedProbs: number[], actualIndex: number): number {
+  // Brier score: sum (p_i - o_i)^2 where o_i is 1 for actual, 0 otherwise
+  return predictedProbs.reduce((acc, p, i) => {
+    const o = i === actualIndex ? 1 : 0;
+    return acc + Math.pow(p - o, 2);
+  }, 0) / predictedProbs.length;
 }
 
-export function reputationDeltaFromBrier(brier: number, nOutcomes: number): number {
-  const maxBrier = 2;
-  const normalized = Math.max(0, Math.min(1, 1 - brier / maxBrier));
-  return parseFloat((normalized * 10 - 5).toFixed(4));
-}
-
-export function updateAverageReputation(oldAvg: number, oldCount: number, delta: number): { newAvg: number; newCount: number } {
-  const newCount = oldCount + 1;
-  const newAvg = ((oldAvg * oldCount) + delta) / newCount;
-  return { newAvg, newCount };
+export function reputationDelta(oldReputation: number, brierBefore: number, brierAfter: number): number {
+  // Positive delta when score improves (lower Brier)
+  const delta = (brierBefore - brierAfter) * 100; // scale factor
+  // Bayesian shrinkage stub: dampen delta based on current reputation
+  const weight = 1 / (1 + Math.log1p(Math.max(0, oldReputation)));
+  const adjusted = delta * weight;
+  // TODO: replace with formal Bayesian model with priors and volatility
+  return adjusted;
 }

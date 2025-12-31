@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  createdAt     DateTime @default(now())
+  insightPoints Int      @default(100) // initial demo points
+  honorLevel    Int      @default(1)
+  reputation    Float    @default(1000.0)
+  // Relations
+  positions     Position[]
+  predictions   Prediction[]
+  reputationRecords ReputationRecord[]
+}
+
+model Market {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  outcomes    Json     // array of outcome labels
+  pool        Json     // array of pool amounts per outcome
+  category    String?
+  editorialApproved Boolean @default(false)
+  startAt     DateTime?
+  endAt       DateTime?
+  status      String   @default("open")
+  createdAt   DateTime @default(now())
+  predictions Prediction[]
+  positions   Position[]
+  settlements Settlement[]
+}
+
+model Prediction {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  market    Market   @relation(fields: [marketId], references: [id])
+  marketId  String
+  outcomeIdx Int
+  points    Int
+  createdAt DateTime @default(now())
+}
+
+model Position {
+  id       String   @id @default(uuid())
+  user     User     @relation(fields: [userId], references: [id])
+  userId   String
+  market   Market   @relation(fields: [marketId], references: [id])
+  marketId String
+  // holdings per outcome
+  holdings Json     @default("[]")
+  updatedAt DateTime @updatedAt
+}
+
+model Settlement {
+  id        String   @id @default(uuid())
+  market    Market   @relation(fields: [marketId], references: [id])
+  marketId  String
+  outcomeIdx Int
+  settledAt DateTime @default(now())
+}
+
+model ReputationRecord {
+  id         String   @id @default(uuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  market     Market?  @relation(fields: [marketId], references: [id])
+  marketId   String?
+  change     Float
+  reason     String?
+  createdAt  DateTime @default(now())
+}
+
+model EventLog {
+  id        String   @id @default(uuid())
+  actorId   String?
+  action    String
+  payload   Json?
+  createdAt DateTime @default(now())
+}
