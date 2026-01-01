@@ -36,7 +36,11 @@ export default function TopicCard({ topic }: { topic: Topic }) {
 
   return (
     <div className="p-4 border rounded shadow-sm">
-      <h3 className="font-semibold">{topic.title}</h3>
+      <h3 className="font-semibold">
+        <a href={`/market/${topic.id}`} className="underline">
+          {topic.title}
+        </a>
+      </h3>
       <p className="text-sm text-gray-600">{topic.description}</p>
       <div className="mt-3 flex items-center gap-3">
         <button
