@@ -1,8 +1,25 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-// Offline leaderboard stub
+import { serverClient } from '../../lib/supabaseClient';
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  return res.json({ leaderboard: [
-    { id: 'u1', email: 'alice@example.com', reputation: 1200, honor_level: 3 },
-    { id: 'u2', email: 'bob@example.com', reputation: 1100, honor_level: 2 }
-  ]});
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  if (!serverClient) return res.status(501).json({ error: 'Supabase missing' });
+
+  const { sort = 'insight_points' } = req.query;
+  const sortBy = ['insight_points', 'reputation'].includes(sort as string) ? sort : 'insight_points';
+
+  const { data, error } = await serverClient
+    .from('user')
+    .select('id, email, insight_points, reputation, honor_level')
+    .order(sortBy as string, { ascending: false })
+    .limit(100);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const leaderboard = (data || []).map(u => ({
+    ...u,
+    displayName: u.email?.split('@')[0] || 'Anonymous'
+  }));
+
+  return res.json({ leaderboard });
 }

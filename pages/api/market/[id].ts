@@ -8,22 +8,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (serverClient) {
     const select = 'id,title,description,outcomes,pool,category,editorial_approved,status,created_at';
-    const primary = await serverClient.from('Market').select(select).eq('id', id).maybeSingle();
+    const primary = await serverClient.from('market').select(select).eq('id', id).maybeSingle();
     if (!primary.error && primary.data) {
       const { probabilities, payoutPerPoint } = computeParimutuelOdds((primary.data as any).pool || []);
       return res.json({ market: primary.data, odds: { probabilities, payoutPerPoint } });
     }
 
     if (primary.error) {
-      console.error('[market:id] select Market failed; retrying market', { error: primary.error, id });
+      console.error('[market:id] select market failed; retrying Market', { error: primary.error, id });
     }
-    const fallback = await serverClient.from('market').select(select).eq('id', id).maybeSingle();
+    const fallback = await serverClient.from('Market').select(select).eq('id', id).maybeSingle();
     if (!fallback.error && fallback.data) {
       const { probabilities, payoutPerPoint } = computeParimutuelOdds((fallback.data as any).pool || []);
       return res.json({ market: fallback.data, odds: { probabilities, payoutPerPoint } });
     }
     if (fallback.error) {
-      console.error('[market:id] select market failed; falling back to demo', { error: fallback.error, id });
+      console.error('[market:id] select Market failed; falling back to demo', { error: fallback.error, id });
     }
   }
 

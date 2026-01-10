@@ -9,9 +9,8 @@ CREATE TABLE IF NOT EXISTS public."user" (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   email text UNIQUE NOT NULL,
   created_at timestamptz DEFAULT now(),
-  insight_points int DEFAULT 100,
-  honor_level int DEFAULT 1,
-  reputation numeric DEFAULT 1000.0
+  points bigint DEFAULT 1000,
+  reputation int DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS public.market (
@@ -24,8 +23,14 @@ CREATE TABLE IF NOT EXISTS public.market (
   editorial_approved boolean DEFAULT false,
   start_at timestamptz,
   end_at timestamptz,
-  status text DEFAULT 'open',
-  created_at timestamptz DEFAULT now()
+  status text DEFAULT 'open', -- 'open', 'closed', 'settled'
+  created_at timestamptz DEFAULT now(),
+  algorithm_type text DEFAULT 'parimutuel', -- 'parimutuel', 'amm'
+  fee_rate numeric DEFAULT 0.02,
+  yes_pool bigint DEFAULT 0,
+  no_pool bigint DEFAULT 0,
+  total_pool bigint DEFAULT 0,
+  resolved_outcome_idx int
 );
 
 CREATE TABLE IF NOT EXISTS public.prediction (
@@ -34,6 +39,7 @@ CREATE TABLE IF NOT EXISTS public.prediction (
   market_id uuid REFERENCES public.market(id) ON DELETE CASCADE,
   outcome_idx int NOT NULL,
   points int NOT NULL,
+  price_at_bet numeric, -- for AMM
   created_at timestamptz DEFAULT now()
 );
 
@@ -41,8 +47,10 @@ CREATE TABLE IF NOT EXISTS public.position (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id uuid REFERENCES public."user"(id) ON DELETE CASCADE,
   market_id uuid REFERENCES public.market(id) ON DELETE CASCADE,
-  holdings jsonb DEFAULT '[]'::jsonb,
+  holdings jsonb DEFAULT '[]'::jsonb, -- e.g. {"0": 100, "1": 50}
   updated_at timestamptz DEFAULT now(),
+  unrealized_profit numeric DEFAULT 0,
+  realized_profit numeric DEFAULT 0,
   CONSTRAINT position_user_market_unique UNIQUE (user_id, market_id)
 );
 
@@ -82,22 +90,25 @@ VALUES (
 )
 ON CONFLICT DO NOTHING;
 
+CREATE INDEX IF NOT EXISTS idx_market_status ON public.market(status);
+CREATE INDEX IF NOT EXISTS idx_market_category ON public.market(category);
+CREATE INDEX IF NOT EXISTS idx_position_user_id ON public.position(user_id);
+CREATE INDEX IF NOT EXISTS idx_position_market_id ON public.position(market_id);
+CREATE INDEX IF NOT EXISTS idx_prediction_market_id ON public.prediction(market_id);
+
 -- RPC: execute_prediction: atomic update that deducts user points and updates market pools, positions, predictions.
-CREATE OR REPLACE FUNCTION public.execute_prediction(market_uuid uuid, user_uuid uuid, outcome_idx int, points int)
+CREATE OR REPLACE FUNCTION public.execute_prediction(market_uuid uuid, user_uuid uuid, outcome_idx int, amount_to_bet int)
 RETURNS jsonb AS $$
 DECLARE
   m_row RECORD;
   u_row RECORD;
-  new_pool jsonb;
-  pool_len int;
+  fee_amount int;
+  net_points int;
 BEGIN
   -- Lock market row
   SELECT * INTO m_row FROM public.market WHERE id = market_uuid FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Market not found';
-  END IF;
-  IF NOT m_row.editorial_approved THEN
-    RAISE EXCEPTION 'Market not approved';
   END IF;
   IF m_row.status <> 'open' THEN
     RAISE EXCEPTION 'Market not open';
@@ -108,55 +119,61 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'User not found';
   END IF;
-  IF u_row.insight_points < points THEN
-    RAISE EXCEPTION 'Insufficient insight points';
+  IF u_row.points < amount_to_bet THEN
+    RAISE EXCEPTION 'Insufficient points';
   END IF;
 
-  new_pool := m_row.pool;
-  IF jsonb_typeof(new_pool) <> 'array' THEN
-    new_pool := '[]'::jsonb;
-  END IF;
-  pool_len := jsonb_array_length(new_pool);
-  IF outcome_idx < 0 OR outcome_idx >= pool_len THEN
-    RAISE EXCEPTION 'Invalid outcome index';
-  END IF;
+  -- Calculate fees
+  fee_amount := floor(amount_to_bet * m_row.fee_rate);
+  net_points := amount_to_bet - fee_amount;
 
-  -- Update pool element at outcome_idx
+  -- Update pools
   UPDATE public.market
-  SET pool = (
-    SELECT jsonb_agg(
-      CASE WHEN i = outcome_idx
-        THEN to_jsonb((COALESCE((new_pool->>i)::int, 0) + points))
-        ELSE to_jsonb(COALESCE((new_pool->>i)::int, 0))
-      END
-    )
-    FROM generate_series(0, pool_len - 1) AS i
-  )
+  SET 
+    yes_pool = CASE WHEN outcome_idx = 0 THEN yes_pool + net_points ELSE yes_pool END,
+    no_pool = CASE WHEN outcome_idx = 1 THEN no_pool + net_points ELSE no_pool END,
+    total_pool = total_pool + net_points
   WHERE id = market_uuid;
 
   -- Deduct points
-  UPDATE public."user" SET insight_points = insight_points - points WHERE id = user_uuid;
+  UPDATE public."user" SET points = points - amount_to_bet WHERE id = user_uuid;
 
   -- Record prediction
-  INSERT INTO public.prediction (user_id, market_id, outcome_idx, points)
-  VALUES (user_uuid, market_uuid, outcome_idx, points);
+  INSERT INTO public.prediction (user_id, market_id, outcome_idx, points, price_at_bet)
+  VALUES (user_uuid, market_uuid, outcome_idx, amount_to_bet, NULL);
 
   -- Upsert holdings
-  INSERT INTO public.position (user_id, market_id, holdings)
-  VALUES (user_uuid, market_uuid, '[]'::jsonb)
+  INSERT INTO public.position (user_id, market_id, holdings, updated_at)
+  VALUES (user_uuid, market_uuid, jsonb_build_object(outcome_idx::text, net_points), now())
   ON CONFLICT (user_id, market_id) DO UPDATE
   SET holdings = jsonb_set(
-    COALESCE(public.position.holdings, '[]'::jsonb),
+    COALESCE(public.position.holdings, '{}'::jsonb),
     ARRAY[outcome_idx::text],
-    to_jsonb((COALESCE((public.position.holdings->>(outcome_idx::text))::int, 0) + points)),
+    to_jsonb((COALESCE((public.position.holdings->>(outcome_idx::text))::int, 0) + net_points)),
     true
   ),
   updated_at = now();
 
   -- Log event
   INSERT INTO public.eventlog (actor_id, action, payload)
-  VALUES (user_uuid, 'place_prediction', jsonb_build_object('market_id', market_uuid, 'outcome_idx', outcome_idx, 'points', points));
+  VALUES (user_uuid, 'place_prediction', jsonb_build_object(
+    'market_id', market_uuid, 
+    'outcome_idx', outcome_idx, 
+    'amount', amount_to_bet,
+    'fee_amount', fee_amount,
+    'net_points', net_points
+  ));
 
-  RETURN jsonb_build_object('status', 'ok');
+  RETURN jsonb_build_object('status', 'ok', 'net_points', net_points, 'fee_amount', fee_amount);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Helper to increment user points safely
+CREATE OR REPLACE FUNCTION public.increment_user_points(user_uuid uuid, amount int)
+RETURNS void AS $$
+BEGIN
+  UPDATE public."user"
+  SET insight_points = insight_points + amount
+  WHERE id = user_uuid;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

@@ -12,14 +12,14 @@ export async function logEvent(actorId: string | null, action: string, payload: 
     payload
   };
 
-  // Use service role to write EventLog; be tolerant to naming differences.
-  const primary = await serverClient.from('EventLog').insert(row);
+  // Use service role to write eventlog; prefer lowercase name first, fallback to EventLog.
+  const primary = await serverClient.from('eventlog').insert(row);
   if (!primary.error) return;
 
-  console.error('[audit] insert EventLog failed; retrying eventlog', { error: primary.error });
-  const fallback = await serverClient.from('eventlog').insert(row);
+  console.error('[audit] insert eventlog failed; retrying EventLog', { error: primary.error });
+  const fallback = await serverClient.from('EventLog').insert(row);
   if (fallback.error) {
-    console.error('[audit] insert eventlog failed', { error: fallback.error });
+    console.error('[audit] insert EventLog failed', { error: fallback.error });
   }
 }
 

@@ -5,13 +5,9 @@ import { isTopicAllowed } from '../../lib/compliance';
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     if (serverClient) {
-      const select = 'id,title,description,outcomes,pool,category';
-      const primary = await serverClient.from('Market').select(select).order('created_at', { ascending: false });
-      if (!primary.error) return res.json({ markets: primary.data || [] });
-
-      // Fallback for lowercase table name
-      const fallback = await serverClient.from('market').select(select).order('created_at', { ascending: false });
-      if (!fallback.error) return res.json({ markets: fallback.data || [] });
+      const select = 'id,title,description,outcomes,category,status,algorithm_type,yes_pool,no_pool,total_pool,deadline';
+      const { data, error } = await serverClient.from('market').select(select).order('created_at', { ascending: false });
+      if (!error) return res.json({ markets: data || [] });
     }
 
     // Return a few static demo markets
@@ -47,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(501).json({ error: 'Supabase not configured' });
     }
 
-    const { title, description, outcomes, category } = req.body;
+    const { title, description, outcomes, category, algorithm, initialLiquidity, deadline } = req.body;
     
     if (!title || !outcomes || !Array.isArray(outcomes)) {
       return res.status(400).json({ error: 'Invalid body' });
@@ -57,17 +53,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Topic not allowed by compliance policy' });
     }
 
+    const algo = algorithm === 'amm' ? 'amm' : 'parimutuel';
+    const initPool = Number(initialLiquidity) || 0;
+
     const row = {
       title,
       description,
-      outcomes, // Supabase handles JSON array
-      pool: outcomes.map(() => 0),
+      outcomes,
       category,
       status: 'open',
-      editorial_approved: true // Admin created
+      algorithm_type: algo,
+      deadline: deadline || null,
+      total_pool: initPool,
+      yes_pool: algo === 'amm' ? initPool / 2 : 0,
+      no_pool: algo === 'amm' ? initPool / 2 : 0
     };
 
-    const { data, error } = await serverClient.from('market').insert(row).single();
+    const { data, error } = await serverClient.from('market').insert([row]).select();
     
     if (error) {
       return res.status(500).json({ error: error.message });
